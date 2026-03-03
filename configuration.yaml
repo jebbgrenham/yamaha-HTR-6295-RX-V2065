@@ -1,0 +1,175 @@
+# configuration.yaml contents (append)
+
+#Sensors
+template:
+  - trigger:
+      - platform: state
+        entity_id: sensor.yamaha_main_status
+    sensor:
+      - name: "Yamaha Input Memory"
+        unique_id: yamaha_input_memory_v5
+        # The state just shows a timestamp; the real data is in the attribute below
+        state: "{{ now().isoformat() }}"
+        attributes:
+          input_map: >
+            {% set current = state_attr('sensor.yamaha_input_memory', 'input_map') %}
+            {% set map = current if current is not none else {"TUNER": "TUNER"} %}
+            
+            {% set id = state_attr('sensor.yamaha_main_status', 'Input_Sel') %}
+            {% set title = state_attr('sensor.yamaha_main_status', 'Input_Sel_Title') | trim %}
+            
+            {% if id and title and title != "" %}
+              {% set map = dict(map, **{id: title}) %}
+            {% endif %}
+            {{ map }}
+
+  - select:
+      - name: "Yamaha Source Selector"
+        state: >
+          {% set inp = state_attr('sensor.yamaha_main_status', 'Input') %}
+          {% if inp %}
+            {{ inp.Input_Sel_Title | trim if inp.Input_Sel_Title else inp.Input_Sel }}
+          {% else %}
+            TUNER
+          {% endif %}
+       
+        options: >
+          {% set map = state_attr('sensor.yamaha_input_memory', 'input_map') %}
+          {{ map.values() | list if map else ['TUNER'] }}
+
+        select_option:
+          - action: rest_command.yamaha_main_input
+            data:
+              input: >
+                {% set map = state_attr('sensor.yamaha_input_memory', 'input_map') %}
+                {% set ns = namespace(found='TUNER') %}
+                {% for id, title in map.items() %}
+                  {% if title == option %} {% set ns.found = id %} {% endif %}
+                {% endfor %}
+                {{ ns.found }}
+          - delay: "00:00:01"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.yamaha_main_status
+
+      - name: "Yamaha Sound Mode"
+        unique_id: yamaha_sound_mode_final
+        state: >
+          {% set surr = state_attr('sensor.yamaha_main_status', 'Surr') %}
+          {{ surr.Pgm_Sel if surr else 'Standard' }}
+        
+        options: "{{ ['Standard', 'Spectacle', 'Sci-Fi', 'Adventure', 'Drama', 'Mono Movie', 'Sports', 'Action Game', 'Roleplaying Game', 'Hall in Munich', 'Hall in Vienna', 'Chamber', 'Cellar Club', 'The Roxy Theater', 'The Bottom Line', 'Music Video', '2ch Stereo', '7ch Stereo', 'Straight Enhancer', '7ch Enhancer', 'Pro Logic', 'STRAIGHT'] }}"
+        
+        select_option:
+          - service: rest_command.yamaha_main_dsp
+            data:
+              dsp_name: "{{ option }}"
+          - delay: "00:00:01"
+          - service: homeassistant.update_entity
+            target:
+              entity_id: sensor.yamaha_main_status
+
+REST polling for state
+rest:
+  - resource: !secret yamahaIP
+    method: POST
+    payload: '<YAMAHA_AV cmd="GET"><Main_Zone><Basic_Status>GetParam</Basic_Status></Main_Zone></YAMAHA_AV>'
+    headers:
+      Content-Type: "text/xml"
+    scan_interval: 2
+
+    sensor:
+      - name: "Yamaha Main Status"
+        value_template: "{{ value_json.YAMAHA_AV.Main_Zone.Basic_Status.Power_Control.Power }}"
+        # Move path up from .Input to .Basic_Status
+        json_attributes_path: "$.YAMAHA_AV.Main_Zone.Basic_Status" 
+        json_attributes:
+          - "Input"
+          - "Surr"
+
+  - resource: !secret yamahaIP
+    method: POST
+    payload: '<YAMAHA_AV cmd="GET"><Tuner><Play_Info>GetParam</Play_Info></Tuner></YAMAHA_AV>'
+    headers:
+      Content-Type: "text/xml"
+    scan_interval: 2
+    sensor:
+      - name: "Yamaha Tuner Frequency"
+        value_template: >
+          {% set freq = value_json.YAMAHA_AV.Tuner.Play_Info.Tuning.Freq.Val | int %}
+          {% set unit = value_json.YAMAHA_AV.Tuner.Play_Info.Tuning.Freq.Unit %}
+          {% if unit == 'MHz' %}
+            {{ (freq / 100) | round(2) }} MHz
+          {% else %}
+            {{ freq }} kHz
+          {% endif %}
+      - name: "Yamaha Tuner Band"
+        value_template: "{{ value_json.YAMAHA_AV.Tuner.Play_Info.Tuning.Band }}"
+      - name: "Yamaha Tuner Preset"
+        value_template: "{{ value_json.YAMAHA_AV.Tuner.Play_Info.Preset.Preset_Sel | int }}"
+
+
+          
+REST commands for actions
+rest_command:
+  yamaha_main_power:
+    url: !secret yamahaIP
+    method: POST
+    payload: '<YAMAHA_AV cmd="PUT"><Main_Zone><Power_Control><Power>{{ status }}</Power></Power_Control></Main_Zone></YAMAHA_AV>'
+
+  yamaha_main_set_volume:
+    url: !secret yamahaIP
+    method: POST
+    payload: '<YAMAHA_AV cmd="PUT"><Main_Zone><Vol><Lvl><Val>{{ volume }}</Val><Exp>1</Exp><Unit>dB</Unit></Lvl></Vol></Main_Zone></YAMAHA_AV>'
+
+  yamaha_main_mute:
+    url: !secret yamahaIP
+    method: POST
+    payload: '<YAMAHA_AV cmd="PUT"><Main_Zone><Vol><Mute>{{ status }}</Mute></Vol></Main_Zone></YAMAHA_AV>'
+
+  yamaha_main_input:
+    url: !secret yamahaIP
+    method: POST
+    headers:
+      Content-Type: "text/xml"
+    payload: '<YAMAHA_AV cmd="PUT"><Main_Zone><Input><Input_Sel>{{ input }}</Input_Sel></Input></Main_Zone></YAMAHA_AV>'
+
+  yamaha_main_scene:
+    url: !secret yamahaIP
+    method: POST
+    headers:
+      Content-Type: "text/xml"
+    # Map the button numbers to the specific Yamaha strings
+    payload: >
+      {% set scene_map = {'1': 'SCENE_BD/DVD', '2': 'SCENE_TV', '3': 'SCENE_CD', '4': 'SCENE_RADIO'} %}
+      <YAMAHA_AV cmd="PUT"><Main_Zone><Input><Input_Sel>{{ scene_map[number] }}</Input_Sel></Input></Main_Zone></YAMAHA_AV>
+
+  yamaha_tuner_band:
+    url: !secret yamahaIP
+    method: POST
+    payload: '<YAMAHA_AV cmd="PUT"><Tuner><Play_Control><Tuning><Band>{{ band }}</Band></Tuning></Play_Control></Tuner></YAMAHA_AV>'
+
+  yamaha_tuner_freq_seek:
+    url: !secret yamahaIP
+    method: POST
+    payload: '<YAMAHA_AV cmd="PUT"><Tuner><Play_Control><Auto_Freq>{{ direction }}</Auto_Freq></Play_Control></Tuner></YAMAHA_AV>'
+
+  yamaha_tuner_preset_step:
+    url: !secret yamahaIP
+    method: POST
+    headers:
+      Content-Type: "text/xml"
+    payload: '<YAMAHA_AV cmd="PUT"><Tuner><Play_Control><Preset><Preset_Sel>{{ direction }}</Preset_Sel></Preset></Play_Control></Tuner></YAMAHA_AV>'
+
+  yamaha_tuner_set_preset:
+    url: !secret yamahaIP
+    method: POST
+    headers:
+      Content-Type: "text/xml"
+    payload: '<YAMAHA_AV cmd="PUT"><Tuner><Play_Control><Preset><Preset_Sel>{{ preset_number }}</Preset_Sel></Preset></Play_Control></Tuner></YAMAHA_AV>'
+
+  yamaha_main_dsp:
+    url: !secret yamahaIP
+    method: POST
+    payload: '<YAMAHA_AV cmd="PUT"><Main_Zone><Surr><Pgm_Sel>{{ dsp_name }}</Pgm_Sel></Surr></Main_Zone></YAMAHA_AV>'
+
