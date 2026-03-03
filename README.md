@@ -28,3 +28,5 @@ yamahaIP: "http://192.168.10.15"
 8. **IMPORTANT**: Your input list will start empty. You need to physically change the source selector on the reciever to EACH input and leave it there for 2-3 seconds. After cycling through all the inputs, dashboard will have a list of them all; AS you've named them using your reciever (ie; you may have renamed "AUDIO 1" to "CD Player". This custom name will appear in the list (once you've cycled to it)
 
 I think that's all, although I haven't bothered testing on a fresh install; I wrote this all in the production env.
+
+If anyone wants to pack this as a custom integration for homeassistant, please do.
