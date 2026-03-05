@@ -1,6 +1,5 @@
 # configuration.yaml contents (append)
 
-#Sensors
 template:
   - trigger:
       - platform: state
@@ -54,6 +53,7 @@ template:
 
       - name: "Yamaha Sound Mode"
         unique_id: yamaha_sound_mode_final
+        # Matches your curl response: <Surr><Pgm_Sel>
         state: >
           {% set surr = state_attr('sensor.yamaha_main_status', 'Surr') %}
           {{ surr.Pgm_Sel if surr else 'Standard' }}
@@ -69,7 +69,20 @@ template:
             target:
               entity_id: sensor.yamaha_main_status
 
-REST polling for state
+  - sensor:
+      - name: "Yamaha Main Volume Raw"
+        unique_id: yamaha_volume_raw_v1
+        # Extracts -480 from the Vol > Lvl > Val path
+        state: >
+          {% set vol_attr = state_attr('sensor.yamaha_main_status', 'Vol') %}
+          {% if vol_attr and vol_attr.Lvl %}
+            {{ vol_attr.Lvl.Val }}
+          {% else %}
+            {{ states('sensor.yamaha_main_volume_raw') }}
+          {% endif %}
+        unit_of_measurement: "dB"
+
+# 1. REST polling for state
 rest:
   - resource: !secret yamahaIP
     method: POST
@@ -77,15 +90,15 @@ rest:
     headers:
       Content-Type: "text/xml"
     scan_interval: 2
-
     sensor:
       - name: "Yamaha Main Status"
         value_template: "{{ value_json.YAMAHA_AV.Main_Zone.Basic_Status.Power_Control.Power }}"
-        # Move path up from .Input to .Basic_Status
-        json_attributes_path: "$.YAMAHA_AV.Main_Zone.Basic_Status" 
+        # To grab Input, Surr, and Vol as top-level attributes
+        json_attributes_path: "$.YAMAHA_AV.Main_Zone.Basic_Status"
         json_attributes:
           - "Input"
           - "Surr"
+          - "Vol"
 
   - resource: !secret yamahaIP
     method: POST
@@ -95,6 +108,7 @@ rest:
     scan_interval: 2
     sensor:
       - name: "Yamaha Tuner Frequency"
+        # Matches your curl: <Tuning><Freq><Val>10190</Val></Freq></Tuning>
         value_template: >
           {% set freq = value_json.YAMAHA_AV.Tuner.Play_Info.Tuning.Freq.Val | int %}
           {% set unit = value_json.YAMAHA_AV.Tuner.Play_Info.Tuning.Freq.Unit %}
@@ -110,7 +124,7 @@ rest:
 
 
           
-REST commands for actions
+# 2. REST commands for actions
 rest_command:
   yamaha_main_power:
     url: !secret yamahaIP
@@ -139,7 +153,7 @@ rest_command:
     method: POST
     headers:
       Content-Type: "text/xml"
-    # Map the button numbers to the specific Yamaha strings
+    # Mapping the button numbers to the specific Yamaha strings
     payload: >
       {% set scene_map = {'1': 'SCENE_BD/DVD', '2': 'SCENE_TV', '3': 'SCENE_CD', '4': 'SCENE_RADIO'} %}
       <YAMAHA_AV cmd="PUT"><Main_Zone><Input><Input_Sel>{{ scene_map[number] }}</Input_Sel></Input></Main_Zone></YAMAHA_AV>
@@ -159,6 +173,8 @@ rest_command:
     method: POST
     headers:
       Content-Type: "text/xml"
+    # Matches P2/G3: Tuner > Play_Control > Preset > Preset_Sel
+    # Note: Use 'Up' or 'Down' (Capitalized) for the direction variable
     payload: '<YAMAHA_AV cmd="PUT"><Tuner><Play_Control><Preset><Preset_Sel>{{ direction }}</Preset_Sel></Preset></Play_Control></Tuner></YAMAHA_AV>'
 
   yamaha_tuner_set_preset:
